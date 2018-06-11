@@ -1,16 +1,65 @@
-import * as http from 'http';
+import express = require('express');
 import * as request from 'request';
-import * as url from 'url';
 
-let config = require('./config');
+const config = require('./config');
 
-let cypher_transaction_url = config.neo4j_transaction_url;
+// Create Express server
+const app = express();
 
-let headers = {'Content-Type': 'application/json',"Access-Control-Allow-Origin" : "*"};
+app.enable('etag');
+app.use(express.urlencoded( { extended: true } ));
+app.use(express.json()); 
+app.use(function(req, res, next) {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Headers", "X-Requested-With");
+  next();
+});
+app.options("/*", function(req, res, next){
+	res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Content-Length, X-Requested-With');
+  res.sendStatus(200);
+});	
+
+app.route('/db/data/read-only_query')
+	.get((clientRequest: express.Request, clientResponse: express.Response) => {
+		let query = clientRequest.query.query;
+		let params = JSON.parse(clientRequest.query.params);
+		handleCypherRequest(query, params, clientResponse);
+	})
+	.post((clientRequest: express.Request, clientResponse: express.Response) => {//untested
+		let query = clientRequest.body.query;
+		let params = clientRequest.body.params;
+		handleCypherRequest(query, params, clientResponse);
+	}
+)
+
+app.listen(config.port, config.host, () => console.log('Listening on port ', config.port));
+
+let handleCypherRequest = (cypherQuery: string, queryParams: object, clientResponse: express.Response) => {
+	if (cypherQuery === undefined || typeof cypherQuery !== "string") {
+		clientResponse.status(400).send("Cypher query missing or invalid format");
+		return;
+	}	
+	executeQuery(cypherQuery, queryParams || {}, (error, res, body) => {
+		if (body && body.errors && body.errors.length > 0) {
+			clientResponse.status(400).send(JSON.stringify(body.errors[0]));
+		} else if (body && body.results && body.results.length > 0) {
+			let results = { ... body.results[0] };
+			let oldData = <[any]>results.data
+			let newData = oldData.map(e => e.row);
+			results.data = newData;
+			delete results.stats;
+			clientResponse.send(JSON.stringify(results));
+		} else {
+			clientResponse.sendStatus(500);
+		}
+	});	
+}
 
 let executeQuery = (statement: string, params: object, cb: (error, response, body) => void): any => {
 	request.post(
-		cypher_transaction_url,
+		config.neo4j_transaction_url,
 		{ 
 			json: { 
 				statements: [{statement: statement, includeStats:true, parameters: params}]
@@ -29,99 +78,3 @@ let executeQuery = (statement: string, params: object, cb: (error, response, bod
 	).auth(config.neo4j_user, config.neo4j_password, false);
 };
 
-http.createServer((request, response) => {
-	try {
-		let query: any = url.parse(request.url, true).query;
-		let path:string = url.parse(request.url).pathname;
-		let params: any = query.parameters;
-		if (path.indexOf("/db/data/read-only_query") !== 0) {
-			response.writeHead(404, headers);
-			response.end();
-			return;
-		}
-		if (request.method === "POST") {
-			var jsonString = '';
-			request.on('data', function (data) {
-					jsonString += data;
-			});
-			request.on('end', function () {
-					let obj;
-					try {
-						obj = JSON.parse(jsonString);
-					} catch(error) {
-						response.writeHead(400, headers);
-						response.end();
-						return;
-					}
-					let query = obj.query;
-					let params = obj.params;
-					//console.log("query", query);
-					//console.log("params", params);
-					if (typeof query === "string") {
-						executeQuery(query, obj.params || {}, (error, res, body) => {
-							if (body && body.errors && body.errors.length > 0) {
-								response.writeHead(400, headers);
-								response.write(JSON.stringify(body.errors[0]));
-								response.end();
-							} else if (body && body.results && body.results.length > 0) {
-								let results = { ... body.results[0] };
-								let oldData = <[any]>results.data
-								let newData = oldData.map(e => e.row);
-								results.data = newData;
-								delete results.stats;
-								response.writeHead(200, headers);
-								response.write(JSON.stringify(results));
-								response.end();
-							} else {
-								response.writeHead(500, headers);
-								response.end();
-							}
-						});
-					} else {
-						response.writeHead(400, headers);
-						response.end();
-					}
-					
-			});
-		} else if (request.method === "GET") {
-			let cypherQuery = query.query;
-			let param = JSON.parse(query.params);
-			executeQuery(cypherQuery, param || {}, (error, res, body) => {
-				if (body && body.errors && body.errors.length > 0) {
-					response.writeHead(400, headers);
-					response.write(JSON.stringify(body.errors[0]));
-					response.end();
-				} else if (body && body.results && body.results.length > 0) {
-					let results = { ... body.results[0] };
-					let oldData = <[any]>results.data
-					let newData = oldData.map(e => e.row);
-					results.data = newData;
-					delete results.stats;
-					response.writeHead(200, headers);
-					response.write(JSON.stringify(results));
-					response.end();
-				} else {
-					response.writeHead(400, headers);
-					response.end();
-				}
-			});
-		} else if (request.method === 'OPTIONS') {
-			var options_headers = {};
-			// IE8 does not allow domains to be specified, just the *
-			// headers["Access-Control-Allow-Origin"] = req.headers.origin;
-			options_headers["Access-Control-Allow-Origin"] = "*";
-			options_headers["Access-Control-Allow-Methods"] = "POST, GET, PUT, DELETE, OPTIONS";
-			options_headers["Access-Control-Allow-Credentials"] = false;
-			options_headers["Access-Control-Max-Age"] = '86400'; // 24 hours
-			options_headers["Access-Control-Allow-Headers"] = "X-Requested-With, X-HTTP-Method-Override, Content-Type, Accept";
-			response.writeHead(200, options_headers);
-			response.end();
-		} else {
-			response.writeHead(400, headers);
-			response.end();
-		}
-	} catch(error) {
-		response.writeHead(500, headers);
-		response.end();
-	}	
-}).listen(config.port, config.host);
