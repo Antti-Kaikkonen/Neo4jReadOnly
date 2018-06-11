@@ -17,7 +17,7 @@ let executeQuery = (statement: string, params: object, cb: (error, response, bod
 			} 
 		},(error, response, body) => {
 			cb(error, response, body);
-			if (typeof body.commit !== "string") return;
+			if (body === undefined || typeof body.commit !== "string") return;
 			let commitURL: string = body.commit;
 			let contains_updates = body.results && body.results.length > 0 && body.results[0].stats.contains_updates;
 			if (!contains_updates) {
@@ -55,15 +55,15 @@ http.createServer((request, response) => {
 					}
 					let query = obj.query;
 					let params = obj.params;
-					console.log("query", query);
-					console.log("params", params);
+					//console.log("query", query);
+					//console.log("params", params);
 					if (typeof query === "string") {
 						executeQuery(query, obj.params || {}, (error, res, body) => {
-							if (body.errors && body.errors.length > 0) {
+							if (body && body.errors && body.errors.length > 0) {
 								response.writeHead(400, headers);
 								response.write(JSON.stringify(body.errors[0]));
 								response.end();
-							} else if (body.results && body.results.length > 0) {
+							} else if (body && body.results && body.results.length > 0) {
 								let results = { ... body.results[0] };
 								let oldData = <[any]>results.data
 								let newData = oldData.map(e => e.row);
@@ -73,7 +73,7 @@ http.createServer((request, response) => {
 								response.write(JSON.stringify(results));
 								response.end();
 							} else {
-								response.writeHead(400, headers);
+								response.writeHead(500, headers);
 								response.end();
 							}
 						});
@@ -87,11 +87,11 @@ http.createServer((request, response) => {
 			let cypherQuery = query.query;
 			let param = JSON.parse(query.params);
 			executeQuery(cypherQuery, param || {}, (error, res, body) => {
-				if (body.errors && body.errors.length > 0) {
+				if (body && body.errors && body.errors.length > 0) {
 					response.writeHead(400, headers);
 					response.write(JSON.stringify(body.errors[0]));
 					response.end();
-				} else if (body.results && body.results.length > 0) {
+				} else if (body && body.results && body.results.length > 0) {
 					let results = { ... body.results[0] };
 					let oldData = <[any]>results.data
 					let newData = oldData.map(e => e.row);
