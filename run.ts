@@ -1,7 +1,19 @@
-import express = require('express');
-import * as request from 'request';
+//import express = require('express');
+import express from 'express';
+import http from 'http';
+import { RequestResponse } from 'request';
+import * as rp from 'request-promise';
+
+var separateReqPool = {maxSockets: 3};
+var httpAgent = new http.Agent()
+httpAgent.maxSockets = 1
 
 const config = require('./config');
+
+//rp.defaults({
+	//forever: true, 
+	//agent: httpAgent
+//});
 
 // Create Express server
 const app = express();
@@ -21,27 +33,30 @@ app.options("/*", function(req, res, next){
   res.sendStatus(200);
 });	
 
+
 app.route('/db/data/read-only_query')
-	.get((clientRequest: express.Request, clientResponse: express.Response) => {
+	.get(async (clientRequest: express.Request, clientResponse: express.Response) => {
 		let query = clientRequest.query.query;
 		let params = JSON.parse(clientRequest.query.params);
-		handleCypherRequest(query, params, clientResponse);
+		await handleCypherRequest(query, params, clientResponse);
 	})
-	.post((clientRequest: express.Request, clientResponse: express.Response) => {//untested
+	.post(async (clientRequest: express.Request, clientResponse: express.Response) => {//untested
 		let query = clientRequest.body.query;
 		let params = clientRequest.body.params;
-		handleCypherRequest(query, params, clientResponse);
+		await handleCypherRequest(query, params, clientResponse);
 	}
 )
 
 app.listen(config.port, config.host, () => console.log('Listening on port ', config.port));
 
-let handleCypherRequest = (cypherQuery: string, queryParams: object, clientResponse: express.Response) => {
+
+let handleCypherRequest = async (cypherQuery: string, queryParams: object, clientResponse: express.Response) => {
+
 	if (cypherQuery === undefined || typeof cypherQuery !== "string") {
 		clientResponse.status(400).send("Cypher query missing or invalid format");
 		return;
 	}	
-	executeQuery(cypherQuery, queryParams || {}, (error, res, body) => {
+	await executeQuery(cypherQuery, queryParams || {}, (error, res, body) => {
 		if (body && body.errors && body.errors.length > 0) {
 			clientResponse.status(400).send(JSON.stringify(body.errors[0]));
 		} else if (body && body.results && body.results.length > 0) {
@@ -54,27 +69,33 @@ let handleCypherRequest = (cypherQuery: string, queryParams: object, clientRespo
 		} else {
 			clientResponse.sendStatus(500);
 		}
-	});	
+	});
 }
 
-let executeQuery = (statement: string, params: object, cb: (error, response, body) => void): any => {
-	request.post(
+let executeQuery = async (statement: string, params: object, cb: (error, response, body) => void): Promise<void> => {
+	await rp.post(
 		config.neo4j_transaction_url,
 		{ 
 			json: { 
 				statements: [{statement: statement, includeStats:true, parameters: params}]
-			} 
-		},(error, response, body) => {
+			},
+			agent: httpAgent,
+			auth: {
+        'user': config.neo4j_user,
+        'pass': config.neo4j_password
+			}
+		}, async (error, response: RequestResponse, body) => {
 			cb(error, response, body);
 			if (body === undefined || typeof body.commit !== "string") return;
 			let commitURL: string = body.commit;
 			let contains_updates = body.results && body.results.length > 0 && body.results[0].stats.contains_updates;
 			if (!contains_updates) {
-				request.post(commitURL, { json: { statements: []} }).auth(config.neo4j_user, config.neo4j_password, false);
+				await rp.post(commitURL, { json: { statements: []} }).auth(config.neo4j_user, config.neo4j_password, false);
 			} else {
-				request.delete(commitURL).auth(config.neo4j_user, config.neo4j_password, false);;//Rollback (readonly)
+				await rp.delete(commitURL).auth(config.neo4j_user, config.neo4j_password, false);;//Rollback (readonly)
 			}
 		}
-	).auth(config.neo4j_user, config.neo4j_password, false);
+	);
+	
 };
 
