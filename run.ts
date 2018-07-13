@@ -23,14 +23,20 @@ app.options("/*", function(req, res, next){
 
 app.route('/db/data/read-only_query')
 	.get((clientRequest: express.Request, clientResponse: express.Response) => {
+
+
 		let query = clientRequest.query.query;
 		let params = JSON.parse(clientRequest.query.params);
-		handleCypherRequest(query, params, clientResponse);
+		let r = handleCypherRequest(query, params, clientResponse);
+
+		clientRequest.on("close", ()=> {if (r !== undefined) r.abort();})
 	})
 	.post((clientRequest: express.Request, clientResponse: express.Response) => {//untested
 		let query = clientRequest.body.query;
 		let params = clientRequest.body.params;
-		handleCypherRequest(query, params, clientResponse);
+		let r = handleCypherRequest(query, params, clientResponse);
+
+		clientRequest.on("close", ()=> {if (r !== undefined) r.abort();})
 	}
 )
 
@@ -41,7 +47,7 @@ let handleCypherRequest = (cypherQuery: string, queryParams: object, clientRespo
 		clientResponse.status(400).send("Cypher query missing or invalid format");
 		return;
 	}	
-	executeQuery(cypherQuery, queryParams || {}, (error, res, body) => {
+	return executeQuery(cypherQuery, queryParams || {}, (error, res, body) => {
 		if (body && body.errors && body.errors.length > 0) {
 			clientResponse.status(400).send(JSON.stringify(body.errors[0]));
 		} else if (body && body.results && body.results.length > 0) {
@@ -58,7 +64,7 @@ let handleCypherRequest = (cypherQuery: string, queryParams: object, clientRespo
 }
 
 let executeQuery = (statement: string, params: object, cb: (error, response, body) => void): any => {
-	request.post(
+	return request.post(
 		config.neo4j_transaction_url,
 		{ 
 			json: { 
