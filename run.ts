@@ -27,27 +27,32 @@ app.route('/db/data/read-only_query')
 
 		let query = clientRequest.query.query;
 		let params = JSON.parse(clientRequest.query.params);
-		let r = handleCypherRequest(query, params, clientResponse);
+		let r: {abort: () => void} = handleCypherRequest(query, params, clientResponse);
 
-		clientRequest.on("close", ()=> {if (r !== undefined) r.abort();})
+		clientRequest.on("close", () => {
+			r.abort();
+		});
 	})
 	.post((clientRequest: express.Request, clientResponse: express.Response) => {//untested
 		let query = clientRequest.body.query;
 		let params = clientRequest.body.params;
-		let r = handleCypherRequest(query, params, clientResponse);
+		let r: {abort: () => void} = handleCypherRequest(query, params, clientResponse);
 
-		clientRequest.on("close", ()=> {if (r !== undefined) r.abort();})
+		clientRequest.on("close", () => {
+			r.abort;
+		});
 	}
 )
 
 app.listen(config.port, config.host, () => console.log('Listening on port ', config.port));
 
-let handleCypherRequest = (cypherQuery: string, queryParams: object, clientResponse: express.Response) => {
+let handleCypherRequest = (cypherQuery: string, queryParams: object, clientResponse: express.Response): {abort: () => void} => {
 	if (cypherQuery === undefined || typeof cypherQuery !== "string") {
 		clientResponse.status(400).send("Cypher query missing or invalid format");
 		return;
 	}	
-	return executeQuery(cypherQuery, queryParams || {}, (error, res, body) => {
+
+	return executeQuery2(cypherQuery, queryParams || {}, (error, res, body) => {
 		if (body && body.errors && body.errors.length > 0) {
 			clientResponse.status(400).send(JSON.stringify(body.errors[0]));
 		} else if (body && body.results && body.results.length > 0) {
@@ -61,26 +66,51 @@ let handleCypherRequest = (cypherQuery: string, queryParams: object, clientRespo
 			clientResponse.sendStatus(500);
 		}
 	});	
+
 }
 
-let executeQuery = (statement: string, params: object, cb: (error, response, body) => void): any => {
-	return request.post(
+let executeQuery2 = (statement: string, params: object, cb: (error, response, body) => void): {abort: () => void} => {
+	let innerRequest: request.Request = undefined;
+	let transactionURL: string;
+	let outerRequest: request.Request = request.post(
 		config.neo4j_transaction_url,
 		{ 
 			json: { 
-				statements: [{statement: statement, includeStats:true, parameters: params}]
+				statements: []
 			} 
 		},(error, response, body) => {
-			cb(error, response, body);
 			if (body === undefined || typeof body.commit !== "string") return;
 			let commitURL: string = body.commit;
-			let contains_updates = body.results && body.results.length > 0 && body.results[0].stats.contains_updates;
-			if (!contains_updates) {
-				request.post(commitURL, { json: { statements: []} }).auth(config.neo4j_user, config.neo4j_password, false);
-			} else {
-				request.delete(commitURL).auth(config.neo4j_user, config.neo4j_password, false);;//Rollback (readonly)
-			}
+			transactionURL = commitURL.substr(0, commitURL.length-"/commit".length);
+
+			innerRequest = request.post(transactionURL, { 
+					json: { 
+						statements: [{statement: statement, includeStats:true, parameters: params}]
+					} 
+				}, (error, response, body) => {
+					cb(error, response, body);
+			
+					let contains_updates = body.results && body.results.length > 0 && body.results[0].stats && body.results[0].stats.contains_updates;
+					if (!contains_updates) {
+						request.post(commitURL, { json: { statements: []} }).auth(config.neo4j_user, config.neo4j_password, false);
+					} else {
+						request.delete(transactionURL).auth(config.neo4j_user, config.neo4j_password, false);//Rollback (readonly)
+					}
+				}
+			).auth(config.neo4j_user, config.neo4j_password, false);
 		}
 	).auth(config.neo4j_user, config.neo4j_password, false);
+	let abortable = { 
+		abort: () => {
+			if (innerRequest !== undefined) {
+				innerRequest.abort();
+				request.delete(transactionURL).auth(config.neo4j_user, config.neo4j_password, false);//Terminate query
+			} else {
+				outerRequest.abort();
+			}
+			
+		}
+	};
+	return abortable;
 };
 
