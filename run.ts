@@ -89,8 +89,15 @@ let executeQuery2 = (statement: string, params: object, cb: (error, response, bo
 					} 
 				}, (error, response, body) => {
 					cb(error, response, body);
-			
-					let contains_updates = body.results && body.results.length > 0 && body.results[0].stats && body.results[0].stats.contains_updates;
+					if (error) {
+						return;
+					}
+					let contains_updates;
+					try {
+						contains_updates = body && body.results && body.results.length > 0 && body.results[0].stats && body.results[0].stats.contains_updates;
+					} catch (e) {
+						contains_updates = false;
+					}
 					if (!contains_updates) {
 						request.post(commitURL, { json: { statements: []} }).auth(config.neo4j_user, config.neo4j_password, false);
 					} else {
