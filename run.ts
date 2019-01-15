@@ -3,6 +3,8 @@ import * as request from 'request';
 
 const config = require('./config');
 
+request.defaults({})
+
 // Create Express server
 const app = express();
 
@@ -39,7 +41,7 @@ app.route('/db/data/read-only_query')
 		let r: {abort: () => void} = handleCypherRequest(query, params, clientResponse);
 
 		clientRequest.on("close", () => {
-			r.abort;
+			r.abort();
 		});
 	}
 )
@@ -86,7 +88,11 @@ let executeQuery2 = (statement: string, params: object, cb: (error, response, bo
 			innerRequest = request.post(transactionURL, { 
 					json: { 
 						statements: [{statement: statement, includeStats:true, parameters: params}]
-					} 
+					},
+					headers: {
+						'connection': 'keep-alive'
+					},
+					timeout: 60000
 				}, (error, response, body) => {
 					cb(error, response, body);
 					if (error) {
@@ -99,9 +105,21 @@ let executeQuery2 = (statement: string, params: object, cb: (error, response, bo
 						contains_updates = false;
 					}
 					if (!contains_updates) {
-						request.post(commitURL, { json: { statements: []} }).auth(config.neo4j_user, config.neo4j_password, false);
+						request.post(commitURL, { 
+							json: { statements: []},
+							headers: {
+								'connection': 'keep-alive'
+							},
+							timeout: 60000 
+						}).auth(config.neo4j_user, config.neo4j_password, false);
 					} else {
-						request.delete(transactionURL).auth(config.neo4j_user, config.neo4j_password, false);//Rollback (readonly)
+						request.delete(transactionURL, 
+						{
+							headers: {
+								'connection': 'keep-alive'
+							},
+							timeout: 60000}
+						).auth(config.neo4j_user, config.neo4j_password, false);//Rollback (readonly)
 					}
 				}
 			).auth(config.neo4j_user, config.neo4j_password, false);
@@ -111,7 +129,12 @@ let executeQuery2 = (statement: string, params: object, cb: (error, response, bo
 		abort: () => {
 			if (innerRequest !== undefined) {
 				innerRequest.abort();
-				request.delete(transactionURL).auth(config.neo4j_user, config.neo4j_password, false);//Terminate query
+				request.delete(transactionURL, {
+					headers: {
+						'connection': 'keep-alive'
+					},
+					timeout: 60000
+				}).auth(config.neo4j_user, config.neo4j_password, false);//Terminate query
 			} else {
 				outerRequest.abort();
 			}
