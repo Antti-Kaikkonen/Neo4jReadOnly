@@ -27,8 +27,8 @@ app.route('/db/data/read-only_query')
 	.get((clientRequest: express.Request, clientResponse: express.Response) => {
 
 
-		let query = clientRequest.query.query;
-		let params = JSON.parse(clientRequest.query.params);
+		let query = clientRequest.query.query.toString();
+		let params = JSON.parse(clientRequest.query.params.toString());
 		let r: {abort: () => void} = handleCypherRequest(query, params, clientResponse);
 
 		clientRequest.on("close", () => {
